@@ -14,9 +14,9 @@ WITH dispatch_with_category AS (
         CASE
             WHEN fuel_type IN ('WIND', 'SOLAR_UTILITY', 'HYDRO') THEN 'Renewables'
             ELSE fuel_type
-        END                                                         AS fuel_category,
+        END                            AS fuel_category,
         -- Convert 5-minute MW dispatch to MWh energy
-        dispatch_mw * (5.0 / 60.0)                                 AS dispatch_mwh
+        dispatch_mw * (5.0 / 60.0)     AS dispatch_mwh
     FROM gold.generation_mix
     WHERE report_month = '2024-08'
 ),
@@ -25,7 +25,7 @@ WITH dispatch_with_category AS (
 regional_totals AS (
     SELECT
         region_id,
-        SUM(dispatch_mwh)                                           AS total_region_mwh
+        SUM(dispatch_mwh)              AS total_region_mwh
     FROM dispatch_with_category
     GROUP BY region_id
 ),
@@ -35,7 +35,7 @@ category_totals AS (
     SELECT
         region_id,
         fuel_category,
-        SUM(dispatch_mwh)                                         AS category_mwh
+        SUM(dispatch_mwh)              AS category_mwh
     FROM dispatch_with_category
     GROUP BY region_id, fuel_category
 )

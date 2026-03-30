@@ -1,16 +1,12 @@
 # NEM Generation Reporting Pipeline — Technical Assessment
 
-> **Tools used:** Claude (Anthropic) assisted with drafting SQL queries, DDL structure, and README prose. All design decisions, architecture choices, and reasoning are my own.
-
----
-
 ## Repository Structure
 
 ```
 ├── diagram/
-│   └── pipeline_architecture.png   # End-to-end Azure pipeline diagram
+│   └── pipeline_architecture.drawio   # End-to-end Azure pipeline diagram
 ├── sql/
-│   ├── schema_ddl.sql               # Bronze / Silver / Gold DDL
+│   ├── schema_ddl.sql                 # Bronze / Silver / Gold DDL
 │   ├── section_a_regional_price_summary.sql
 │   ├── section_b_generation_mix.sql
 │   └── section_c_top_generators.sql
@@ -23,20 +19,20 @@
 
 ### Diagram
 
-See `diagram/pipeline_architecture.png`.
+See `diagram/pipeline_architecture.drawio`.
 
 ### Description
 
 The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold) on Microsoft Azure, using ADLS2 as the storage backbone and Databricks as the transformation engine.
 
 **Layering decisions:**
-The Bronze layer ingests raw data with no transformation — it preserves the source exactly as received, which is critical for auditability and reprocessing. The Silver layer applies validation, type casting, deduplication, and enriches `unit_dispatch` with generator metadata from the reference table. Keeping these concerns separate means that if the reference data changes (e.g. a station changes owner), Silver can be rebuilt without re-ingesting Bronze. The Gold layer materialises pre-aggregated tables purpose-built for the three report sections, so the BI tool runs against small, indexed aggregates rather than hundreds of thousands of raw interval rows.
+The Bronze layer ingests raw data with no transformation. It preserves the source exactly as received, which is critical for auditability and reprocessing. The Silver layer applies validation, type casting, deduplication, and enriches `unit_dispatch` with generator metadata from the reference table. The Gold layer materialises pre-aggregated tables built for the three report sections, so the BI tool runs against aggregated values rather than hundreds of thousands of raw interval rows.
 
 **Handling the daily email delivery of `raw_unit_dispatch.csv`:**
-An Azure Logic App monitors the data provider's email inbox using the Office 365 connector. When a new email arrives from the expected sender with a CSV attachment, the Logic App extracts the attachment and writes it to a dedicated `raw/unit_dispatch/` path in ADLS2, naming the file with the delivery date (e.g. `unit_dispatch_2024-08-02.csv`). Azure Data Factory then detects the new file via a tumbling window trigger and loads it into the `bronze.unit_dispatch` Delta table, partitioned by `interval_date`. The key reliability considerations are: (1) idempotent loads using Delta's `MERGE` on `(duid, interval_datetime)` so late or duplicate deliveries don't produce duplicate rows; (2) a Logic App dead-letter queue and alert if no file arrives by 09:00 AEST; and (3) file archiving after successful ingestion so re-runs can replay from the raw file rather than re-requesting the email.
+An Azure Logic App monitors the data provider's email inbox. When a new email arrives from the expected sender with a CSV attachment, the Logic App extracts the attachment and writes it to a dedicated `raw/unit_dispatch/` path in ADLS2, naming the file with the delivery date (e.g. `unit_dispatch_2024-08-02.csv`). Azure Data Factory then detects the new file via an event-based trigger and loads it into the `bronze.unit_dispatch` Delta table. The key reliability considerations are: (1) idempotent loads using Delta's `MERGE` on `(duid, interval_datetime)` so late or duplicate deliveries don't produce duplicate rows; (2) a Logic App dead-letter queue and alert if no file arrives by 09:00 AEST; and (3) file archiving after successful ingestion so re-runs can replay from the raw file rather than re-requesting the email.
 
 **Orchestration:**
-ADF pipelines orchestrate ingestion and trigger Databricks notebook jobs for Silver and Gold transformations. The Gold refresh runs after Silver completes, using ADF dependency chaining. For monitoring and alerting, Azure Monitor alerts are configured on pipeline failure, and a Data Quality notebook in Databricks validates row counts and null rates before promoting Silver to Gold.
+ADF pipelines orchestrate ingestion and trigger Databricks notebook jobs for Bronze, Silver and Gold transformations. The Gold refresh runs after Silver completes, using ADF dependency chaining. For monitoring and alerting, Azure Monitor alerts are configured on pipeline failure, and a Data Quality notebook in Databricks validates row counts and null rates before promoting Silver to Gold.
 
 ---
 
@@ -65,7 +61,7 @@ Partitioning by `interval_date` in Bronze and Silver enables efficient increment
 See `sql/section_a_regional_price_summary.sql`.
 
 **Assumptions and choices:**
-The NEM market price cap is **$16,600/MWh** and the market floor price is **−$1,000/MWh** as per AEMO's market price limits effective from 1 July 2024. Intervals at or above the cap (`rrp >= 16600`) are flagged as price cap events. Intervals with `rrp < 0` are counted as negative price intervals (the floor threshold is not separately flagged in this section since the report layout only requests a negative price count). The Gold table is queried directly since it already holds the per-region aggregates; the `GROUP BY` in the query re-aggregates the generated column flags which are stored at interval grain in the Silver layer but pre-summed in Gold.
+The NEM market price cap is **$17,500/MWh** and the market floor price is **−$1,000/MWh** as per AEMO's market price limits effective from 1 July 2024. Intervals at or above the cap (`rrp >= 17500`) are flagged as price cap events. Intervals with `rrp < 0` are counted as negative price intervals (the floor threshold is not separately flagged in this section since the report layout only requests a negative price count). The Gold table is queried directly since it already holds the per-region aggregates; the `GROUP BY` in the query re-aggregates the generated column flags which are stored at interval grain in the Silver layer but pre-summed in Gold.
 
 ---
 
@@ -96,3 +92,7 @@ See `sql/section_c_top_generators.sql`.
 - **NEM regions:** NSW1, VIC1, QLD1, SA1, TAS1 are the five interconnected regions of the Australian National Electricity Market.
 - **RRP:** The Regional Reference Price is the settlement price for each 5-minute dispatch interval. The market cap and floor are set by AEMO and are reviewed annually.
 - **DUID:** Dispatch Unit Identifier — the unique identifier for each generating unit registered with AEMO.
+
+> **AI Tool used:** I used ChatGPT to check SQL queries and revise the README file. 
+
+---

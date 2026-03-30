@@ -9,11 +9,12 @@
 
 SELECT
     region_id,
-    ROUND(AVG(rrp), 2)                                          AS avg_rrp,
-    ROUND(MIN(rrp), 2)                                          AS min_rrp,
-    ROUND(MAX(rrp), 2)                                          AS max_rrp,
-    COUNT_IF(rrp >= 17500)                                      AS intervals_count_at_price_cap,
-    COUNT_IF(rrp < 0)                                           AS intervals_count_negative_price
+    ROUND(AVG(rrp), 2)                  AS avg_rrp,
+    ROUND(MIN(rrp), 2)                  AS min_rrp,
+    ROUND(MAX(rrp), 2)                  AS max_rrp,
+    COUNT_IF(rrp >= 17500)              AS intervals_count_at_price_cap,
+    COUNT_IF(rrp < 0)                   AS intervals_count_negative_price,
+    COUNT_IF(rrp <= -1000)              AS intervals_count_below_floor_price
 FROM gold.regional_price_summary
 WHERE report_month = '2024-08'
 GROUP BY region_id

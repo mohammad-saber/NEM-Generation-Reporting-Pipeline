@@ -1,112 +1,98 @@
-# NEM Generation Reporting Pipeline Assessment
+# NEM Generation Reporting Pipeline — Technical Assessment
 
-This repository contains my proposed solution for the NEM generation reporting pipeline assessment.
+> **Tools used:** Claude (Anthropic) assisted with drafting SQL queries, DDL structure, and README prose. All design decisions, architecture choices, and reasoning are my own.
 
-## 1) Proposed Azure pipeline architecture
+---
 
-### Design summary
-I use a medallion-style layout on Azure Data Lake Storage Gen2 (bronze/silver/gold) because it keeps raw source fidelity, makes transformations auditable, and gives the BI layer clean semantic tables rather than forcing dashboard logic onto raw files. The daily `raw_unit_dispatch.csv` email feed is handled by **Azure Logic Apps**, which watches a dedicated mailbox, validates the sender/attachment pattern, writes the attachment and email metadata to a landing container in ADLS, and triggers orchestration. **Azure Data Factory (ADF)** orchestrates all ingestions and dependency ordering, while **Azure Databricks** performs parsing, deduplication, enrichment, unit conversion from MW to MWh, and publication of curated Delta tables. I keep the 5‑minute fact tables at interval grain so the model stays reusable, and the three report queries remain very short and BI-friendly.
+## Repository Structure
 
-### Reliable handling of the emailed unit-dispatch file
-The email-delivered source is the riskiest part of the pipeline, so I would make it explicitly idempotent and observable. Logic Apps writes each attachment with a deterministic file path (for example by provider date), captures sender / subject / received timestamp / checksum, and stores a control record so the same file is not processed twice. ADF then validates the expected delivery date, row count > 0, schema, and attachment naming; failed files are quarantined and notified via Teams/email. The original attachment is retained unchanged in bronze so the pipeline is replayable and auditable.
+```
+├── diagram/
+│   └── pipeline_architecture.png   # End-to-end Azure pipeline diagram
+├── sql/
+│   ├── schema_ddl.sql               # Bronze / Silver / Gold DDL
+│   ├── section_a_regional_price_summary.sql
+│   ├── section_b_generation_mix.sql
+│   └── section_c_top_generators.sql
+└── README.md
+```
 
-### End-to-end flow
-See the diagram in `diagram/azure_nem_pipeline.svg`.
+---
 
-## 2) Data model
+## Part 1 — Pipeline Architecture
 
-I keep three layers:
+### Diagram
 
-- **Bronze**: immutable raw landing tables/files
-- **Silver**: cleaned and standardized tables, including an SCD2 generator dimension
-- **Gold**: analytics-ready interval facts used directly by BI
+See `diagram/pipeline_architecture.png`.
 
-The model is intentionally narrow:
-- one regional 5-minute fact table for prices/demand
-- one generator-unit 5-minute fact table for dispatch
-- one generator dimension for descriptive attributes and slowly changing ownership/capacity
+### Description
 
-This avoids unnecessary duplication while keeping all three report sections straightforward:
-- Section A reads from `gold.fact_region_interval`
-- Section B reads from `gold.fact_generator_interval`
-- Section C reads from `gold.fact_generator_interval`
+The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold) on Microsoft Azure, using ADLS2 as the storage backbone and Databricks as the transformation engine.
 
-### Grain and partitioning choices
-I partition the large interval tables by `market_date` because the unit-dispatch feed arrives daily and the natural incremental load unit is one market day. This gives efficient append/reprocess behavior without rewriting an entire month. I do **not** partition the small generator dimension because it is tiny and better accessed through point lookups / joins on `duid`.
+**Layering decisions:**
+The Bronze layer ingests raw data with no transformation — it preserves the source exactly as received, which is critical for auditability and reprocessing. The Silver layer applies validation, type casting, deduplication, and enriches `unit_dispatch` with generator metadata from the reference table. Keeping these concerns separate means that if the reference data changes (e.g. a station changes owner), Silver can be rebuilt without re-ingesting Bronze. The Gold layer materialises pre-aggregated tables purpose-built for the three report sections, so the BI tool runs against small, indexed aggregates rather than hundreds of thousands of raw interval rows.
 
-### Produced tables
+**Handling the daily email delivery of `raw_unit_dispatch.csv`:**
+An Azure Logic App monitors the data provider's email inbox using the Office 365 connector. When a new email arrives from the expected sender with a CSV attachment, the Logic App extracts the attachment and writes it to a dedicated `raw/unit_dispatch/` path in ADLS2, naming the file with the delivery date (e.g. `unit_dispatch_2024-08-02.csv`). Azure Data Factory then detects the new file via a tumbling window trigger and loads it into the `bronze.unit_dispatch` Delta table, partitioned by `interval_date`. The key reliability considerations are: (1) idempotent loads using Delta's `MERGE` on `(duid, interval_datetime)` so late or duplicate deliveries don't produce duplicate rows; (2) a Logic App dead-letter queue and alert if no file arrives by 09:00 AEST; and (3) file archiving after successful ingestion so re-runs can replay from the raw file rather than re-requesting the email.
 
-#### Bronze
-1. **bronze.raw_dispatch_intervals**
-   - Grain: one raw region row per 5-minute interval from AEMO
-   - Partition: `market_date`
+**Orchestration:**
+ADF pipelines orchestrate ingestion and trigger Databricks notebook jobs for Silver and Gold transformations. The Gold refresh runs after Silver completes, using ADF dependency chaining. For monitoring and alerting, Azure Monitor alerts are configured on pipeline failure, and a Data Quality notebook in Databricks validates row counts and null rates before promoting Silver to Gold.
 
-2. **bronze.raw_unit_dispatch**
-   - Grain: one raw DUID row per 5-minute interval from the email attachment
-   - Partition: `market_date`
+---
 
-3. **bronze.raw_reference_generators**
-   - Grain: one raw generator reference row per file snapshot
-   - Partition: `snapshot_date`
+## Part 2 — Data Model
 
-#### Silver
-4. **silver.dispatch_intervals_clean**
-   - Grain: one deduplicated region row per 5-minute interval
-   - Notes: standardised timestamps, data types, and data-quality flags
-   - Partition: `market_date`
+### DDL
 
-5. **silver.dim_generator_scd**
-   - Grain: one versioned generator record per DUID per effective period
-   - Notes: SCD2 structure for owner/capacity/retirement changes
-   - Partition: none
+See `sql/schema_ddl.sql` for full `CREATE TABLE` statements.
 
-#### Gold
-6. **gold.fact_region_interval**
-   - Grain: one region row per 5-minute interval
-   - Notes: includes report-friendly flags such as `is_price_cap_interval` and `is_floor_price_interval`
-   - Partition: `market_date`
+### Description
 
-7. **gold.fact_generator_interval**
-   - Grain: one DUID row per 5-minute interval, enriched with generator attributes
-   - Notes: includes `dispatch_mwh` and `availability_mwh_equiv` derived from 5-minute MW values
-   - Partition: `market_date`
+The model contains **three Bronze tables** (raw), **three Silver tables** (conformed), and **three Gold tables** (one per report section).
 
-## 3) DDL
-The DDL for the proposed tables is in `sql/00_data_model.sql`.
+The central design decision is to pre-join `unit_dispatch` with `reference_generators` at the Silver layer, so that station name, owner, registered capacity, and region are carried forward on every dispatch row. This eliminates repeated joins in Gold and in BI queries, and means the Gold tables are self-contained for reporting. The alternative — joining at query time against a slowly-changing reference — risks inconsistency if the reference is updated mid-month.
 
-## 4) Report queries
+The `silver.unit_dispatch` table also includes a generated column `dispatch_mwh = dispatch_mw * (5.0 / 60.0)`, making the MW-to-MWh conversion explicit and consistent across all downstream queries. This is important for energy domain correctness: MW is instantaneous power; MWh is the energy produced over the 5-minute interval, which is what the report's generation mix and capacity factor calculations require.
 
-### Section A — Regional price summary
-Query file: `sql/01_section_a_regional_price_summary.sql`
+Partitioning by `interval_date` in Bronze and Silver enables efficient incremental daily loads — each day's ADF run only writes to one partition, and historical partitions are never rewritten. Gold tables are partitioned by `report_month`, which matches how the BI tool filters (monthly reports) and keeps each month's aggregation isolated for easy re-runs.
 
-Assumptions / choices:
-- The report is monthly, so the query filters by a month window using `market_date`.
-- I count negative-price intervals as `rrp < 0`, while also keeping a separate floor-price flag (`rrp <= -1000`) in the gold table for auditability / future reporting.
+---
 
-### Section B — Generation mix by fuel type
-Query file: `sql/02_section_b_generation_mix.sql`
+## Part 3 — Report Queries
 
-Assumptions / choices:
-- Dispatch is converted from MW to MWh at 5-minute interval grain before aggregation (`dispatch_mwh = dispatch_mw * 5/60`).
-- `WIND`, `SOLAR_UTILITY`, and `HYDRO` are rolled into `RENEWABLES` exactly as requested.
+### Section A — Regional Price Summary
 
-### Section C — Top 10 generators by dispatch volume
-Query file: `sql/03_section_c_top10_generators.sql`
+See `sql/section_a_regional_price_summary.sql`.
 
-Assumptions / choices:
-- Capacity factor is calculated over the selected reporting period as total dispatched MWh divided by (`registered_capacity_mw × total hours in period`).
-- In the provided sample data, station is effectively one-to-one with DUID; in production I would keep DUID as the technical key and expose station attributes in the BI layer.
+**Assumptions and choices:**
+The NEM market price cap is **$16,600/MWh** and the market floor price is **−$1,000/MWh** as per AEMO's market price limits effective from 1 July 2024. Intervals at or above the cap (`rrp >= 16600`) are flagged as price cap events. Intervals with `rrp < 0` are counted as negative price intervals (the floor threshold is not separately flagged in this section since the report layout only requests a negative price count). The Gold table is queried directly since it already holds the per-region aggregates; the `GROUP BY` in the query re-aggregates the generated column flags which are stored at interval grain in the Silver layer but pre-summed in Gold.
 
-## 5) Validation notes against the supplied sample files
-I validated the SQL logic against the supplied August 2024 CSV files. One duplicate row exists in `raw_dispatch_intervals.csv`, so the silver step explicitly deduplicates on `(interval_datetime, region_id)` before publishing the gold fact table. This is a good example of why the bronze/silver separation is useful: raw fidelity is preserved, but downstream reporting remains clean and deterministic.
+---
 
-## 6) Azure services used in the proposed solution
-- Azure Logic Apps
-- Azure Data Factory
-- Azure Data Lake Storage Gen2
-- Azure Databricks (Delta Lake / Spark SQL)
-- Azure Key Vault (for mailbox / source credentials)
-- Power BI or another BI tool on top of the gold tables
+### Section B — Generation Mix by Fuel Type
 
-## 7) AI usage disclosure
-I used ChatGPT to help structure the written solution and review SQL / architecture wording. The final design, assumptions, and modelling decisions were reviewed and tailored for this assessment.
+See `sql/section_b_generation_mix.sql`.
+
+**Assumptions and choices:**
+Wind (`WIND`), utility-scale solar (`SOLAR_UTILITY`), and hydro (`HYDRO`) are consolidated into a single `Renewables` category using a `CASE` expression before aggregation. All other fuel types (Black Coal, Brown Coal, Gas OCGT, Gas CCGT, Battery Storage) are reported as their own categories. Dispatch volumes are converted from MW to MWh (MW × 5/60) before summing, because energy share — not instantaneous capacity share — is the appropriate metric for a generation mix report. The percentage is calculated per region against the region's total dispatched energy, so proportions correctly reflect each fuel's contribution within that region's supply.
+
+---
+
+### Section C — Top 10 Generators by Dispatch Volume *(optional)*
+
+See `sql/section_c_top_generators.sql`.
+
+**Capacity factor definition (per the inline SQL comment):**
+> Capacity factor = actual MWh dispatched in August 2024 ÷ (registered nameplate capacity MW × 744 hours in August 2024) × 100.
+
+**Assumptions and choices:**
+744 hours is the correct value for August 2024 (31 days × 24 hours). This is a portfolio-level capacity factor: it includes hours when a unit may have been offline for maintenance or constrained — it is not a measure of operational efficiency but of how hard each asset was run relative to its theoretical maximum over the month. This is consistent with how the metric is typically used in NEM generation reporting by trading teams. Units with very high capacity factors (>80–90%) are likely baseload thermal plant; renewables will show lower capacity factors reflecting their resource availability.
+
+---
+
+## Energy Domain Notes
+
+- **MW vs MWh:** All dispatch data is in MW (instantaneous power). Energy (MWh) is derived by multiplying by the interval duration in hours (5 min = 5/60 hours). This distinction is applied consistently across Silver and Gold layers.
+- **NEM regions:** NSW1, VIC1, QLD1, SA1, TAS1 are the five interconnected regions of the Australian National Electricity Market.
+- **RRP:** The Regional Reference Price is the settlement price for each 5-minute dispatch interval. The market cap and floor are set by AEMO and are reviewed annually.
+- **DUID:** Dispatch Unit Identifier — the unique identifier for each generating unit registered with AEMO.

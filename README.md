@@ -27,7 +27,7 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold) o
 
 **Layering decisions:**
 
-The Bronze layer ingests raw data with no transformation. It preserves the source exactly as received, which is critical for auditability and reprocessing. The Silver layer applies validation, type casting, deduplication, and enriches `unit_dispatch` with generator metadata from the reference table. The Gold layer materialises pre-aggregated tables built for the three report sections, so the BI tool runs against aggregated values rather than hundreds of thousands of raw interval rows.
+The Bronze layer ingests raw data with no transformation. It preserves the source exactly as received, which is critical for auditability and reprocessing. The Silver layer applies validation, deduplication, and enriches `unit_dispatch` with generator metadata from the reference table. The Gold layer materialises pre-aggregated tables built for the three report sections, therefore the BI tool runs against aggregated values rather than hundreds of thousands of raw interval rows.
 
 **Handling the daily email delivery of `raw_unit_dispatch.csv`:**
 

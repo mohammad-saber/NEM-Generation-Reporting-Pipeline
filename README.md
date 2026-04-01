@@ -29,7 +29,9 @@ The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold) o
 The Bronze layer ingests raw data with no transformation. It preserves the source exactly as received, which is critical for auditability and reprocessing. The Silver layer applies validation, type casting, deduplication, and enriches `unit_dispatch` with generator metadata from the reference table. The Gold layer materialises pre-aggregated tables built for the three report sections, so the BI tool runs against aggregated values rather than hundreds of thousands of raw interval rows.
 
 **Handling the daily email delivery of `raw_unit_dispatch.csv`:**
-An Azure Logic App monitors the data provider's email inbox. When a new email arrives from the expected sender with a CSV attachment, the Logic App extracts the attachment and writes it to a dedicated `raw/unit_dispatch/` path in ADLS2, naming the file with the delivery date (e.g. `unit_dispatch_2024-08-02.csv`). Azure Data Factory then detects the new file via an event-based trigger and loads it into the `bronze.unit_dispatch` Delta table. The key reliability considerations are: (1) idempotent loads using Delta's `MERGE` on `(duid, interval_datetime)` so late or duplicate deliveries don't produce duplicate rows; (2) a Logic App dead-letter queue and alert if no file arrives by 09:00 AEST; and (3) file archiving after successful ingestion so re-runs can replay from the raw file rather than re-requesting the email.
+An Azure Logic App monitors the data provider's email inbox. When a new email arrives from the expected sender with a CSV attachment, the Logic App extracts the attachment and writes it to a dedicated `raw/unit_dispatch/` path in ADLS2, naming the file with the delivery date (e.g. `unit_dispatch_2024-08-02.csv`). Azure Data Factory then detects the new file via an event-based trigger and loads it into the `bronze.unit_dispatch` Delta table. 
+
+The key reliability considerations are: (1) a Logic App dead-letter queue and alert if no file arrives by 09:00 AEST; and (2) file archiving after successful ingestion so re-runs can replay from the raw file rather than re-requesting the email.
 
 **Orchestration:**
 ADF pipelines orchestrate ingestion and trigger Databricks notebook jobs for Bronze, Silver and Gold transformations. The Gold refresh runs after Silver completes, using ADF dependency chaining. For monitoring and alerting, Azure Monitor alerts are configured on pipeline failure, and a Data Quality notebook in Databricks validates row counts and null rates before promoting Silver to Gold.
@@ -44,9 +46,9 @@ See `sql/schema_ddl.sql` for full `CREATE TABLE` statements.
 
 ### Description
 
-The model contains **three Bronze tables** (raw), **three Silver tables** (conformed), and **three Gold tables** (one per report section).
+The model contains **three Bronze tables** (raw), **three Silver tables** (cleaned), and **three Gold tables** (one per report section).
 
-The central design decision is to pre-join `unit_dispatch` with `reference_generators` at the Silver layer, so that station name, owner, registered capacity, and region are carried forward on every dispatch row. This eliminates repeated joins in Gold and in BI queries, and means the Gold tables are self-contained for reporting. The alternative — joining at query time against a slowly-changing reference — risks inconsistency if the reference is updated mid-month.
+The central design decision is to pre-join `unit_dispatch` with `reference_generators` at the Silver layer, so that station name, owner, registered capacity, and region are carried forward on every dispatch row. This eliminates repeated joins in Gold and in BI queries, and means the Gold tables are self-contained for reporting.
 
 The `silver.unit_dispatch` table also includes a generated column `dispatch_mwh = dispatch_mw * (5.0 / 60.0)`, making the MW-to-MWh conversion explicit and consistent across all downstream queries. This is important for energy domain correctness: MW is instantaneous power; MWh is the energy produced over the 5-minute interval, which is what the report's generation mix and capacity factor calculations require.
 
@@ -61,7 +63,12 @@ Partitioning by `interval_date` in Bronze and Silver enables efficient increment
 See `sql/section_a_regional_price_summary.sql`.
 
 **Assumptions and choices:**
-The NEM market price cap is **$17,500/MWh** and the market floor price is **−$1,000/MWh** as per AEMO's market price limits effective from 1 July 2024. Intervals at or above the cap (`rrp >= 17500`) are flagged as price cap events. Intervals with `rrp < 0` are counted as negative price intervals (the floor threshold is not separately flagged in this section since the report layout only requests a negative price count). The Gold table is queried directly since it already holds the per-region aggregates; the `GROUP BY` in the query re-aggregates the generated column flags which are stored at interval grain in the Silver layer but pre-summed in Gold.
+
+The NEM market price cap is **$17,500/MWh** and the market floor price is **−$1,000/MWh** as per AEMO's market price limits effective from 1 July 2024. 
+
+Intervals with `rrp >= price cap` and `rrp <= floor price` are counted and reported.
+
+The Gold table is queried directly since it already holds the per-region aggregates.
 
 ---
 
@@ -70,7 +77,9 @@ The NEM market price cap is **$17,500/MWh** and the market floor price is **−$
 See `sql/section_b_generation_mix.sql`.
 
 **Assumptions and choices:**
-Wind (`WIND`), utility-scale solar (`SOLAR_UTILITY`), and hydro (`HYDRO`) are consolidated into a single `Renewables` category using a `CASE` expression before aggregation. All other fuel types (Black Coal, Brown Coal, Gas OCGT, Gas CCGT, Battery Storage) are reported as their own categories. Dispatch volumes are converted from MW to MWh (MW × 5/60) before summing, because energy share — not instantaneous capacity share — is the appropriate metric for a generation mix report. The percentage is calculated per region against the region's total dispatched energy, so proportions correctly reflect each fuel's contribution within that region's supply.
+
+Wind (`WIND`), utility-scale solar (`SOLAR_UTILITY`), and hydro (`HYDRO`) are consolidated into a single `Renewables` category using a `CASE` expression before aggregation. All other fuel types (Black Coal, Brown Coal, Gas OCGT, Gas CCGT, Battery Storage) are reported as their own categories. 
+The percentage is calculated per region against the region's total dispatched energy.
 
 ---
 

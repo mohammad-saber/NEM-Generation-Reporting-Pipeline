@@ -93,18 +93,18 @@ CREATE TABLE IF NOT EXISTS silver.dispatch_intervals (
 )
 USING DELTA
 PARTITIONED BY (interval_date)
-COMMENT 'Silver: cleaned dispatch intervals with derived flags';
+COMMENT 'Silver: cleaned dispatch intervals';
 
 
 -- Grain: one row per DUID per 5-minute interval (deduped, enriched with station metadata)
--- Partitioned by interval_date.
+-- Partitioned by interval_date for incremental silver processing.
 CREATE TABLE IF NOT EXISTS silver.unit_dispatch (
     interval_datetime       TIMESTAMP,
     interval_date           DATE,
     duid                    STRING,
     region_id               STRING,
     dispatch_mw             DOUBLE,
-    dispatch_mwh            DOUBLE,   -- dispatch_mw * (5.0 / 60.0)
+    dispatch_mwh            DOUBLE,   -- dispatch_mw * (5.0 / 60.0), transformation happens in the notebook
     availability_mw         DOUBLE,
     fuel_type               STRING,
     -- enriched from reference_generators
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS silver.reference_generators (
     source_file_path        STRING,
     ingestion_timestamp     TIMESTAMP, 
     transformation_timestamp  TIMESTAMP, 
-    CONSTRAINT pk_reference_generators PRIMARY KEY (duid)
+    CONSTRAINT pk_reference_generators PRIMARY KEY (duid)  -- informational only, not enforced
 )
 USING DELTA
 COMMENT 'Silver: current-state generator reference, deduplicated';
@@ -161,11 +161,11 @@ COMMENT 'Silver: current-state generator reference, deduplicated';
 CREATE TABLE IF NOT EXISTS gold.regional_price_summary (
     report_month                STRING,   -- e.g. '2024-08'  
     region_id                   STRING,
-    avg_rrp                     DOUBLE,   -- ROUND(AVG(rrp), 2) over all 5-minute intervals in the month for the region
-    min_rrp                     DOUBLE,   -- MIN(rrp) over all 5-minute intervals in the month for the region
-    max_rrp                     DOUBLE,   -- MAX(rrp) over all 5-minute intervals in the month for the region
-    intervals_count_above_price_cap      BIGINT,   -- COUNT_IF(rrp >= 17500) — intervals where RRP hits the AEMO market price cap
-    intervals_count_below_floor_price    BIGINT,   -- COUNT_IF(rrp <= -1000) — intervals where RRP hits the AEMO market floor price
+    avg_rrp                     DOUBLE,   -- ROUND(AVG(rrp), 2) over all 5-minute intervals in the month for the region (transformation happens in the notebook)
+    min_rrp                     DOUBLE,   -- MIN(rrp) over all 5-minute intervals in the month for the region (transformation happens in the notebook)
+    max_rrp                     DOUBLE,   -- MAX(rrp) over all 5-minute intervals in the month for the region (transformation happens in the notebook)
+    intervals_count_above_price_cap      BIGINT,   -- COUNT_IF(rrp >= 17500) (transformation happens in the notebook)
+    intervals_count_below_floor_price    BIGINT,   -- COUNT_IF(rrp <= -1000) (transformation happens in the notebook)
     transformation_timestamp    TIMESTAMP
 )
 USING DELTA
@@ -173,31 +173,31 @@ PARTITIONED BY (report_month)
 COMMENT 'Gold: Section A — regional RRP statistics per month';
 
 
--- Grain: one row per region per fuel_category per report_month
+-- Grain: one row per region per fuel_type per report_month
 -- Partitioned by: report_month for BI tool filter push-down.
 CREATE TABLE IF NOT EXISTS gold.generation_mix (
-    report_month            STRING,
+    report_month            STRING,   -- e.g. '2024-08'
     region_id               STRING,
     fuel_type               STRING,
-    total_dispatch_mwh      DOUBLE,   -- SUM(dispatch_mwh) in "silver.unit_dispatch" across all intervals for the report month 
+    total_dispatch_mwh      DOUBLE,   -- SUM(dispatch_mwh) in "silver.unit_dispatch" across all intervals for the report month (transformation happens in the notebook)
     transformation_timestamp      TIMESTAMP   
 )
 USING DELTA
 PARTITIONED BY (report_month)
-COMMENT 'Gold: Section B — dispatch energy by region and fuel category (Renewables rolled up)';
+COMMENT 'Gold: Section B — dispatch energy by region and fuel type';
 
 
 -- Grain: one row per DUID per report_month (all generators)
 -- Partitioned by: report_month for BI tool filter push-down.
 CREATE TABLE IF NOT EXISTS gold.top_generators (
-    report_month                STRING,
+    report_month                STRING,   -- e.g. '2024-08'
     duid                        STRING      NOT NULL,
     station_name                STRING,
     owner                       STRING,
     fuel_type                   STRING,
     region_id                   STRING,
     registered_capacity_mw      DOUBLE,
-    total_dispatch_mwh          DOUBLE,    -- SUM(dispatch_mwh) in "silver.unit_dispatch" across all intervals for the report month
+    total_dispatch_mwh          DOUBLE,    -- SUM(dispatch_mwh) in "silver.unit_dispatch" across all intervals for the report month (transformation happens in the notebook)
     transformation_timestamp    TIMESTAMP
 )
 USING DELTA

@@ -23,5 +23,5 @@ SELECT
     )                                                       AS capacity_factor_pct
 FROM gold.top_generators
 WHERE report_month = '2024-08'
-ORDER BY total_dispatch_mwh DESC
+ORDER BY rank
 LIMIT 10;

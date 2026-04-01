@@ -5,8 +5,9 @@
 -- Wind, Solar_Utility, and Hydro are rolled up into a single "Renewables"
 -- category. All other fuel types are reported individually.
 
--- total_dispatch_mwh is already pre-aggregated in the Gold table
--- (SUM of dispatch_mw * 5/60 across all intervals in the month).
+-- total_dispatch_mwh is already pre-aggregated in the Gold table as explained below:
+-- SUM of dispatch_mwh from "silver.unit_dispatch" across all intervals in the month,
+-- where dispatch_mwh = dispatch_mw * (5.0 / 60.0)
 -- =============================================================================
 
 WITH dispatch_by_category AS (

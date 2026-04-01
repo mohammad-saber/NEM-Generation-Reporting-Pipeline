@@ -15,8 +15,8 @@ SELECT
     avg_rrp,
     min_rrp,
     max_rrp,
-    intervals_count_at_price_cap,
-    intervals_count_negative_price
+    intervals_count_above_price_cap,
+    intervals_count_below_floor_price
 FROM gold.regional_price_summary
 WHERE report_month = '2024-08'
 ORDER BY region_id;

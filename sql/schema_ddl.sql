@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS silver.reference_generators (
     source_file_name        STRING,
     source_file_path        STRING,
     ingestion_timestamp     TIMESTAMP, 
-    transformation_timestamp  TIMESTAMP 
+    transformation_timestamp  TIMESTAMP, 
     CONSTRAINT pk_reference_generators PRIMARY KEY (duid)
 )
 USING DELTA
@@ -162,8 +162,8 @@ CREATE TABLE IF NOT EXISTS gold.regional_price_summary (
     avg_rrp                     DOUBLE,   -- ROUND(AVG(rrp), 2) over all 5-minute intervals in the month for the region
     min_rrp                     DOUBLE,   -- MIN(rrp) over all 5-minute intervals in the month for the region
     max_rrp                     DOUBLE,   -- MAX(rrp) over all 5-minute intervals in the month for the region
-    intervals_count_at_price_cap      BIGINT,   -- COUNT_IF(rrp >= 17500) — intervals where RRP hits the AEMO market price cap
-    intervals_count_negative_price    BIGINT,   -- COUNT_IF(rrp <= -1000) — intervals where RRP hits the AEMO market floor price
+    intervals_count_above_price_cap      BIGINT,   -- COUNT_IF(rrp >= 17500) — intervals where RRP hits the AEMO market price cap
+    intervals_count_below_floor_price    BIGINT,   -- COUNT_IF(rrp <= -1000) — intervals where RRP hits the AEMO market floor price
     transformation_timestamp    TIMESTAMP
 )
 USING DELTA

@@ -37,7 +37,7 @@ The key reliability considerations are: (1) a Logic App dead-letter queue and al
 
 **Orchestration:**
 
-ADF pipelines orchestrate ingestion and trigger Databricks notebook jobs for Bronze, Silver and Gold transformations. The Gold refresh runs after Silver completes, using ADF dependency chaining. For monitoring and alerting, Azure Monitor alerts are configured on pipeline failure, and a Data Quality notebook in Databricks validates row counts and null rates before promoting Silver to Gold.
+ADF pipelines orchestrate ingestion and trigger Databricks notebook jobs for Bronze, Silver and Gold transformations. The Gold refresh runs after Silver completes, using ADF dependency chaining. For monitoring and alerting, Azure Monitor alerts are configured on pipeline failure, and a Data Quality notebook in Databricks validates row counts and null rates before loading to Silver tables.
 
 ---
 

@@ -82,9 +82,7 @@ CREATE TABLE IF NOT EXISTS silver.dispatch_intervals (
     region_id               STRING,
     rrp                     DOUBLE,
     total_demand_mw         DOUBLE,
-    scheduled_generation_mw DOUBLE,
-    is_price_cap            BOOLEAN,   -- 1 if it is >= price cap         
-    is_negative_price       BOOLEAN,   -- 1 if it negative       
+    scheduled_generation_mw DOUBLE,     
     -- metadata
     source_file_name        STRING,
     source_file_path        STRING,
@@ -104,7 +102,7 @@ CREATE TABLE IF NOT EXISTS silver.unit_dispatch (
     duid                    STRING,
     region_id               STRING,
     dispatch_mw             DOUBLE,
-    dispatch_mwh            DOUBLE,
+    dispatch_mwh            DOUBLE,   -- dispatch_mw * (5.0 / 60.0)
     availability_mw         DOUBLE,
     fuel_type               STRING,
     -- enriched from reference_generators
@@ -155,14 +153,17 @@ COMMENT 'Silver: current-state generator reference, deduplicated';
 
 -- Grain: one row per region per report_month
 -- Partitioned by report_month for BI tool filter push-down.
+-- We calculate count of intervals at or above the price cap 
+-- and intervals at or below the floor price. 
+-- Floor price flag is used only (no general negative price count was added to the query).
 CREATE TABLE IF NOT EXISTS gold.regional_price_summary (
     report_month                STRING,   -- e.g. '2024-08'  
     region_id                   STRING,
-    avg_rrp                     DOUBLE,
-    min_rrp                     DOUBLE,
-    max_rrp                     DOUBLE,
-    intervals_count_at_price_cap      BIGINT,
-    intervals_count_negative_price    BIGINT,
+    avg_rrp                     DOUBLE,   -- ROUND(AVG(rrp), 2) over all 5-minute intervals in the month for the region
+    min_rrp                     DOUBLE,   -- MIN(rrp) over all 5-minute intervals in the month for the region
+    max_rrp                     DOUBLE,   -- MAX(rrp) over all 5-minute intervals in the month for the region
+    intervals_count_at_price_cap      BIGINT,   -- COUNT_IF(rrp >= 17500) — intervals where RRP hits the AEMO market price cap
+    intervals_count_negative_price    BIGINT,   -- COUNT_IF(rrp <= -1000) — intervals where RRP hits the AEMO market floor price
     transformation_timestamp    TIMESTAMP
 )
 USING DELTA
@@ -171,12 +172,12 @@ COMMENT 'Gold: Section A — regional RRP statistics per month';
 
 
 -- Grain: one row per region per fuel_category per report_month
--- Partitioned by: report_month
+-- Partitioned by: report_month for BI tool filter push-down.
 CREATE TABLE IF NOT EXISTS gold.generation_mix (
     report_month            STRING,
     region_id               STRING,
     fuel_type               STRING,
-    dispatch_mw             DOUBLE,
+    total_dispatch_mwh      DOUBLE,   -- SUM(dispatch_mwh) in "silver.unit_dispatch" across all intervals for the report month 
     transformation_timestamp      TIMESTAMP   
 )
 USING DELTA
@@ -185,7 +186,7 @@ COMMENT 'Gold: Section B — dispatch energy by region and fuel category (Renewa
 
 
 -- Grain: one row per DUID per report_month (all generators)
--- Partitioned by: report_month
+-- Partitioned by: report_month for BI tool filter push-down.
 CREATE TABLE IF NOT EXISTS gold.top_generators (
     report_month                STRING,
     duid                        STRING      NOT NULL,
@@ -194,12 +195,12 @@ CREATE TABLE IF NOT EXISTS gold.top_generators (
     fuel_type                   STRING,
     region_id                   STRING,
     registered_capacity_mw      DOUBLE,
-    dispatch_mw                 DOUBLE,
+    total_dispatch_mwh          DOUBLE,    -- SUM(dispatch_mwh) in "silver.unit_dispatch" across all intervals for the report month
     transformation_timestamp    TIMESTAMP
 )
 USING DELTA
 PARTITIONED BY (report_month)
-COMMENT 'Gold: Section C — per-unit dispatch totals, join with generators for capacity factor';
+COMMENT 'Gold: Section C — per-unit dispatch totals';
 
 
 

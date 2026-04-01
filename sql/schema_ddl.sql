@@ -18,13 +18,14 @@ CREATE TABLE IF NOT EXISTS bronze.dispatch_intervals (
     rrp                 DOUBLE,
     total_demand_mw     DOUBLE,
     scheduled_generation_mw DOUBLE,
+    interval_date       DATE GENERATED ALWAYS AS (CAST(interval_datetime AS DATE)),       
     -- ingestion metadata
     source_file_name    STRING,
     source_file_path    STRING,
-    ingestion_timestamp TIMESTAMP       
+    ingestion_timestamp TIMESTAMP    
 )
 USING DELTA
-PARTITIONED BY (interval_date DATE GENERATED ALWAYS AS CAST(interval_datetime AS DATE))
+PARTITIONED BY (interval_date)
 COMMENT 'Bronze: raw AEMO 5-minute regional pricing and demand intervals';
 
 
@@ -39,13 +40,14 @@ CREATE TABLE IF NOT EXISTS bronze.unit_dispatch (
     dispatch_mw         DOUBLE,
     availability_mw     DOUBLE,
     fuel_type           STRING,
+    interval_date       DATE GENERATED ALWAYS AS (CAST(interval_datetime AS DATE)),  
     -- ingestion metadata
     source_file_name    STRING,
     source_file_path    STRING,
-    ingestion_timestamp TIMESTAMP  
+    ingestion_timestamp TIMESTAMP
 )
 USING DELTA
-PARTITIONED BY (interval_date DATE GENERATED ALWAYS AS CAST(interval_datetime AS DATE))
+PARTITIONED BY (interval_date)
 COMMENT 'Bronze: raw unit dispatch from daily email file (external data provider)';
 
 

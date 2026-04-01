@@ -78,11 +78,14 @@ Wind (`WIND`), utility-scale solar (`SOLAR_UTILITY`), and hydro (`HYDRO`) are co
 
 See `sql/section_c_top_generators.sql`.
 
-**Capacity factor definition (per the inline SQL comment):**
-> Capacity factor = actual MWh dispatched in August 2024 ÷ (registered nameplate capacity MW × 744 hours in August 2024) × 100.
+**Capacity factor definition:**
+> Capacity factor = (actual energy output over a specific period) ÷ (maximum potential output if it operated at full nameplate capacity continuously).
+
+For August 2024, it is calculated as:
+> Capacity factor in percentage = (actual MWh dispatched in August 2024) ÷ (registered nameplate capacity MW × 744 hours in August 2024) × 100.
 
 **Assumptions and choices:**
-744 hours is the correct value for August 2024 (31 days × 24 hours). This is a portfolio-level capacity factor: it includes hours when a unit may have been offline for maintenance or constrained — it is not a measure of operational efficiency but of how hard each asset was run relative to its theoretical maximum over the month. This is consistent with how the metric is typically used in NEM generation reporting by trading teams. Units with very high capacity factors (>80–90%) are likely baseload thermal plant; renewables will show lower capacity factors reflecting their resource availability.
+744 hours is the correct value for August 2024 (31 days × 24 hours). 
 
 ---
 
@@ -90,9 +93,11 @@ See `sql/section_c_top_generators.sql`.
 
 - **MW vs MWh:** All dispatch data is in MW (instantaneous power). Energy (MWh) is derived by multiplying by the interval duration in hours (5 min = 5/60 hours). This distinction is applied consistently across Silver and Gold layers.
 - **NEM regions:** NSW1, VIC1, QLD1, SA1, TAS1 are the five interconnected regions of the Australian National Electricity Market.
-- **RRP:** The Regional Reference Price is the settlement price for each 5-minute dispatch interval. The market cap and floor are set by AEMO and are reviewed annually.
-- **DUID:** Dispatch Unit Identifier — the unique identifier for each generating unit registered with AEMO.
+- **RRP:** The Regional Reference Price is the settlement price for each 5-minute dispatch interval. The market cap and floor are set by AEMO.
+- **DUID:** Dispatchable Unit Identifier — the unique identifier for each generating unit registered with AEMO.
 
-> **AI Tool used:** I used ChatGPT to check SQL queries and revise the README file. 
+---
+
+**AI Tool used:** I used ChatGPT to check SQL queries and revise the README file. 
 
 ---

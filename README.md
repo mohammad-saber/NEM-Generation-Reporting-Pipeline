@@ -26,14 +26,17 @@ See `diagram/pipeline_architecture.drawio`.
 The pipeline follows a **Medallion architecture** (Bronze → Silver → Gold) on Microsoft Azure, using ADLS2 as the storage backbone and Databricks as the transformation engine.
 
 **Layering decisions:**
+
 The Bronze layer ingests raw data with no transformation. It preserves the source exactly as received, which is critical for auditability and reprocessing. The Silver layer applies validation, type casting, deduplication, and enriches `unit_dispatch` with generator metadata from the reference table. The Gold layer materialises pre-aggregated tables built for the three report sections, so the BI tool runs against aggregated values rather than hundreds of thousands of raw interval rows.
 
 **Handling the daily email delivery of `raw_unit_dispatch.csv`:**
+
 An Azure Logic App monitors the data provider's email inbox. When a new email arrives from the expected sender with a CSV attachment, the Logic App extracts the attachment and writes it to a dedicated `raw/unit_dispatch/` path in ADLS2, naming the file with the delivery date (e.g. `unit_dispatch_2024-08-02.csv`). Azure Data Factory then detects the new file via an event-based trigger and loads it into the `bronze.unit_dispatch` Delta table. 
 
 The key reliability considerations are: (1) a Logic App dead-letter queue and alert if no file arrives by 09:00 AEST; and (2) file archiving after successful ingestion so re-runs can replay from the raw file rather than re-requesting the email.
 
 **Orchestration:**
+
 ADF pipelines orchestrate ingestion and trigger Databricks notebook jobs for Bronze, Silver and Gold transformations. The Gold refresh runs after Silver completes, using ADF dependency chaining. For monitoring and alerting, Azure Monitor alerts are configured on pipeline failure, and a Data Quality notebook in Databricks validates row counts and null rates before promoting Silver to Gold.
 
 ---
